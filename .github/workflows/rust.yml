@@ -1,0 +1,48 @@
+name: Rust
+#
+# run build and bench against stable, beta, and nightly
+#
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+#          - 1.47.0  # MSRV
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: ${{ matrix.rust }}
+        override: true
+        components: rustfmt, clippy
+
+    - uses: Swatinem/rust-cache@v1
+
+    - uses: actions-rs/cargo@v1
+      with:
+        command: build
+
+    - uses: actions-rs/cargo@v1
+      with:
+        command: bench
+
+    - name: Archive bench logs
+      uses: actions/upload-artifact@v2
+      if: sucess()
+      with:
+        name: bench-criterion
+        path: target/criterion

@@ -1,0 +1,43 @@
+name: Testing
+#
+# Run tests on Linux, Windows, and Mac using nightly.
+#
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build_matrix:
+    name: Run tests for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        name: [linux, windows, macos]
+        include:
+          - name: linux
+            os: ubuntu-latest
+
+          - name: windows
+            os: windows-latest
+
+          - name: macos
+            os: macos-latest
+
+    steps:
+    - uses: actions/checkout@v1
+
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: nightly
+        override: true
+
+    - uses: Swatinem/rust-cache@v1
+
+    - name: Test
+      run: cargo test --workspace --tests -- --test-threads 1
+      env:
+        RUST_BACKTRACE: full
