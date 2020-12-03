@@ -7,7 +7,7 @@ struct Forwarder {
 }
 
 impl Forwarder {
-    pub fn new(id: usize) -> Self {
+    pub const fn new(id: usize) -> Self {
         Self {
             inner_async: async_std::sync::Mutex::new(AsyncForwarder::new(id)),
         }
@@ -48,13 +48,8 @@ impl ExperimentDriver for ServerSimulator {
         let forwarder = Forwarder::new(0);
 
         let task = async_std::task::spawn(async move {
-            loop {
-                let cmd = concentrator_r.recv_async().await;
-                if cmd.is_ok() {
-                    forwarder.receive(cmd.unwrap()).await;
-                } else {
-                    break;
-                }
+            while let Ok(cmd) = concentrator_r.recv_async().await {
+                forwarder.receive(cmd).await;
             }
         });
         self.tasks.push(task);
@@ -65,24 +60,18 @@ impl ExperimentDriver for ServerSimulator {
                 let (s, r) = flume::bounded::<TestMessage>(250);
                 let forwarder = Forwarder::new(id);
                 let task = async_std::task::spawn(async move {
-                    loop {
-                        let cmd = r.recv_async().await;
-                        if cmd.is_ok() {
-                            forwarder.receive(cmd.unwrap()).await;
-                        } else {
-                            break;
-                        }
+                    while let Ok(cmd) = r.recv_async().await {
+                        forwarder.receive(cmd).await;
                     }
                 });
                 self.tasks.push(task);
-                if prev.is_none() {
-                    self.heads.push(TestMessageSender::FlumeSender(s.clone()));
-                } else {
-                    let sender = prev.unwrap();
-                    async_std::task::block_on(send_cmd_async(
+                // if first, save head, otherwise forward previous to this sender
+                match prev {
+                    Some(sender) => async_std::task::block_on(send_cmd_async(
                         &sender,
                         TestMessage::AddSender(TestMessageSender::FlumeSender(s.clone())),
-                    ));
+                    )),
+                    None => self.heads.push(TestMessageSender::FlumeSender(s.clone())),
                 }
                 prev = Some(TestMessageSender::FlumeSender(s));
             }
@@ -112,9 +101,7 @@ impl ExperimentDriver for ServerSimulator {
         }
         if let Some(ref mut notifier) = self.notifier {
             match notifier {
-                TestMessageReceiver::FlumeReceiver(ref mut receiver) => {
-                    if async_std::task::block_on(receiver.recv_async()).is_err() {}
-                },
+                TestMessageReceiver::FlumeReceiver(ref mut receiver) => if async_std::task::block_on(receiver.recv_async()).is_err() {},
                 _ => panic!("unexpected receiver"),
             }
         }

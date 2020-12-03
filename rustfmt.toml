@@ -10,4 +10,4 @@ spaces_around_ranges = true
 fn_args_layout = "Compressed"
 #single_line_if_else_max_width = 100
 report_todo = "Always"
-report_fixme = "Always"
+report_fixme = "Never"

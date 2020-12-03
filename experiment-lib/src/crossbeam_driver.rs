@@ -48,10 +48,9 @@ impl ExperimentDriver for ServerSimulator {
         let (concentrator_s, concentrator_r) = crossbeam::channel::bounded::<TestMessage>(250);
         let forwarder = Forwarder::new(0);
 
-        let handle = std::thread::spawn(move || loop {
-            match concentrator_r.recv() {
-                Ok(cmd) => forwarder.receive(cmd),
-                Err(_) => break,
+        let handle = std::thread::spawn(move || {
+            while let Ok(cmd) = concentrator_r.recv() {
+                forwarder.receive(cmd);
             }
         });
         self.threads.push(handle);
@@ -71,13 +70,10 @@ impl ExperimentDriver for ServerSimulator {
                 recvs[id].push(r);
                 let forwarder = Forwarder::new(id + 1);
                 forwarders[id].push(forwarder);
-                if prev.is_none() {
-                    // save the head of each lane
-                    self.heads.push(TestMessageSender::CrossbeamSender(s.clone()));
-                } else {
-                    // otherwise tell the previous to send to this forwarder
-                    let sender = prev.unwrap();
-                    send_cmd(&sender, TestMessage::AddSender(TestMessageSender::CrossbeamSender(s.clone())));
+                // if first, save head, otherwise forward previous to this sender
+                match prev {
+                    Some(sender) => send_cmd(&sender, TestMessage::AddSender(TestMessageSender::CrossbeamSender(s.clone()))),
+                    None => self.heads.push(TestMessageSender::CrossbeamSender(s.clone())),
                 }
                 prev = Some(TestMessageSender::CrossbeamSender(s));
             }
@@ -132,9 +128,8 @@ impl ExperimentDriver for ServerSimulator {
         }
         // wait for the concentrator to send the notification message
         if let Some(ref notifier) = self.notifier {
-            match notifier {
-                TestMessageReceiver::CrossbeamReceiver(receiver) => if receiver.recv().is_err() {},
-                _ => (),
+            if let TestMessageReceiver::CrossbeamReceiver(receiver) = notifier {
+                if receiver.recv().is_err() {}
             }
         }
     }

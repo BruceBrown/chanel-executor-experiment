@@ -1,21 +1,56 @@
+use parking_lot::Mutex;
+use slab::Slab;
+use std::fmt;
+/// This is bare-bones. It is just enough to allow crossbeam to operate in async.
+/// There may be some significant omissions here, which could lead to crases.
+/// This implements async send and recv as futures with the underlying channels
+/// being wrapped crossbeam channels. All that being said, for our limited case,
+/// it seems to work well.
+///
+/// It is built upon futures 0.3
 use std::future::Future;
-
-use std::fmt::{self, Debug, Display};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::process;
-use std::sync::atomic::{self, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
-use crossbeam::channel::{TryRecvError, TrySendError};
+use crossbeam::channel::{RecvError, TryRecvError, TrySendError};
 
+struct WakerSet {
+    slab: Mutex<Slab<Option<Waker>>>,
+}
+impl WakerSet {
+    fn new() -> Self {
+        Self {
+            slab: Mutex::new(Slab::with_capacity(4)),
+        }
+    }
+    fn insert(&self, ctx: &Context<'_>) -> usize {
+        let w = ctx.waker().clone();
+        let key = self.slab.lock().insert(Some(w));
+        key
+    }
+    const fn cancel(&self, _key: usize) {}
+    fn remove(&self, key: usize) { self.slab.lock().remove(key); }
+    fn notify(&self) -> bool {
+        let mut slab = self.slab.lock();
+        for (_, opt_waker) in slab.iter_mut() {
+            if let Some(w) = opt_waker.take() {
+                w.wake();
+                return true;
+            }
+        }
+        false
+    }
+}
 pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     let channel = Arc::new(Channel::with_capacity(cap));
     let s = Sender { channel: channel.clone() };
     let r = Receiver {
-        channel: channel,
-        opt_key: None,
+        channel,
+        // opt_key: None,
     };
     (s, r)
 }
@@ -24,8 +59,8 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
     let channel = Arc::new(Channel::new());
     let s = Sender { channel: channel.clone() };
     let r = Receiver {
-        channel: channel,
-        opt_key: None,
+        channel,
+        // opt_key: None,
     };
     (s, r)
 }
@@ -51,13 +86,15 @@ impl<T> Sender<T> {
 
                     // If the current task is in the set, remove it.
                     if let Some(key) = self.opt_key.take() {
-                        // todo fix this
-                        // self.channel.send_wakers.remove(key);
+                        self.channel.send_wakers.remove(key);
                     }
 
                     // Try sending the message.
                     match self.channel.try_send(msg) {
-                        Ok(()) => return Poll::Ready(()),
+                        Ok(()) => {
+                            self.channel.recv_wakers.notify();
+                            return Poll::Ready(());
+                        },
                         Err(TrySendError::Disconnected(msg)) => {
                             self.msg = Some(msg);
                             return Poll::Pending;
@@ -65,9 +102,7 @@ impl<T> Sender<T> {
                         Err(TrySendError::Full(msg)) => {
                             self.msg = Some(msg);
                             // Insert this send operation.
-                            // todo fix this
-                            // self.opt_key = Some(self.channel.send_wakers.insert(cx));
-
+                            self.opt_key = Some(self.channel.send_wakers.insert(cx));
                             // If the channel is still full and not disconnected, return.
                             if self.channel.is_full() && !self.channel.is_disconnected() {
                                 return Poll::Pending;
@@ -84,8 +119,8 @@ impl<T> Sender<T> {
                 // Wake up another task instead.
 
                 if let Some(key) = self.opt_key {
-                    // todo fix this
-                    // self.channel.send_wakers.cancel(key);
+                    // fixme: fix this
+                    self.channel.send_wakers.cancel(key);
                 }
             }
         }
@@ -130,26 +165,79 @@ impl<T> fmt::Debug for Sender<T> {
 pub struct Receiver<T> {
     /// The inner channel.
     channel: Arc<Channel<T>>,
-    /// The key for this receiver in the `channel.stream_wakers` set.
-    opt_key: Option<usize>,
+    /* The key for this receiver in the `channel.stream_wakers` set.
+     * opt_key: Option<usize>, */
 }
 impl<T> Receiver<T> {
+    pub async fn recv(&self) -> Result<T, RecvError> {
+        struct RecvFuture<'a, T> {
+            channel: &'a Channel<T>,
+            opt_key: Option<usize>,
+        }
+        impl<T> Future for RecvFuture<'_, T> {
+            type Output = Result<T, RecvError>;
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                poll_recv(self.channel, &self.channel.recv_wakers, &mut self.opt_key, cx)
+            }
+        }
+        impl<T> Drop for RecvFuture<'_, T> {
+            fn drop(&mut self) {
+                // If the current task is still in the set, that means it is being cancelled now.
+                if let Some(key) = self.opt_key {
+                    self.channel.recv_wakers.cancel(key);
+                }
+            }
+        }
+
+        RecvFuture {
+            channel: &self.channel,
+            opt_key: None,
+        }
+        .await
+    }
     pub fn try_recv(&self) -> Result<T, TryRecvError> { self.channel.try_recv() }
     pub fn capacity(&self) -> Option<usize> { self.channel.capacity() }
     pub fn is_empty(&self) -> bool { self.channel.is_empty() }
     pub fn is_full(&self) -> bool { self.channel.is_full() }
     pub fn len(&self) -> usize { self.channel.len() }
 }
+fn poll_recv<T>(channel: &Channel<T>, wakers: &WakerSet, opt_key: &mut Option<usize>, cx: &mut Context<'_>) -> Poll<Result<T, RecvError>> {
+    loop {
+        // If the current task is in the set, remove it.
+        if let Some(key) = opt_key.take() {
+            wakers.remove(key);
+        }
+
+        // Try receiving a message.
+        match channel.try_recv() {
+            Ok(msg) => {
+                channel.send_wakers.notify();
+                return Poll::Ready(Ok(msg));
+            },
+            Err(TryRecvError::Disconnected) => return Poll::Ready(Err(RecvError {})),
+            Err(TryRecvError::Empty) => {
+                // Insert this receive operation.
+                *opt_key = Some(wakers.insert(cx));
+
+                // If the channel is still empty and not disconnected, return.
+                if channel.is_empty() && !channel.is_disconnected() {
+                    return Poll::Pending;
+                }
+            },
+        }
+    }
+}
 impl<T> Clone for Receiver<T> {
-    fn clone(&self) -> Receiver<T> {
+    fn clone(&self) -> Self {
         let count = self.channel.receiver_count.fetch_add(1, Ordering::Relaxed);
         // Make sure the count never overflows, even if lots of receiver clones are leaked.
         if count > isize::MAX as usize {
             process::abort();
         }
-        Receiver {
+        Self {
             channel: self.channel.clone(),
-            opt_key: None,
+            // opt_key: None,
         }
     }
 }
@@ -162,6 +250,8 @@ struct Channel<T> {
     receiver: crossbeam::channel::Receiver<T>,
     sender_count: AtomicUsize,
     receiver_count: AtomicUsize,
+    send_wakers: WakerSet,
+    recv_wakers: WakerSet,
     /// Indicates that dropping a `Channel<T>` may drop values of type `T`.
     _marker: PhantomData<T>,
 }
@@ -173,6 +263,8 @@ impl<T> Channel<T> {
             receiver,
             sender_count: AtomicUsize::new(1),
             receiver_count: AtomicUsize::new(1),
+            send_wakers: WakerSet::new(),
+            recv_wakers: WakerSet::new(),
             _marker: PhantomData,
         }
     }
@@ -183,6 +275,8 @@ impl<T> Channel<T> {
             receiver,
             sender_count: AtomicUsize::new(1),
             receiver_count: AtomicUsize::new(1),
+            send_wakers: WakerSet::new(),
+            recv_wakers: WakerSet::new(),
             _marker: PhantomData,
         }
     }
@@ -193,6 +287,6 @@ impl<T> Channel<T> {
     fn is_full(&self) -> bool { self.receiver.is_full() }
     fn len(&self) -> usize { self.receiver.len() }
 
-    pub fn is_disconnected(&self) -> bool { false }
-    fn disconnect(&self) {}
+    pub const fn is_disconnected(&self) -> bool { false }
+    const fn disconnect(&self) {}
 }
