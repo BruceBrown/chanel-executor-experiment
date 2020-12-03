@@ -1,5 +1,4 @@
 use super::*;
-///
 /// This is a bunch of supporting enums, traits, functions, etc that are needed by main and bench.
 
 // Each experiment will implement the ExperimentDriver trait
@@ -36,31 +35,31 @@ pub enum TestMessage {
 // These are the flavors of senders that the forward has to deal with
 #[derive(Debug, Clone)]
 pub enum TestMessageSender {
-    //StdMsgSender(std::sync::mpsc::SyncSender<TestMessage>),
     CrossbeamSender(crossbeam::channel::Sender<TestMessage>),
     D3Sender(d3::core::machine_impl::Sender<TestMessage>),
     TokioSender(tokio::sync::mpsc::Sender<TestMessage>),
     FlumeSender(flume::Sender<TestMessage>),
-    //AsyncCrossbeamSender(async_channel::Sender<TestMessage>),
+    AsyncCrossbeamSender(async_channel::Sender<TestMessage>),
     FuturesSender(futures::channel::mpsc::Sender<TestMessage>),
+    SmolSender(smol::channel::Sender<TestMessage>),
 }
 
 // These are the flavors of receivers that the forward has to deal with
 #[derive(Debug)]
 pub enum TestMessageReceiver {
-    //StdMsgReceiver(std::sync::mpsc::Receiver<TestMessage>),
     CrossbeamReceiver(crossbeam::channel::Receiver<TestMessage>),
     D3Receiver(d3::core::machine_impl::Receiver<TestMessage>),
     TokioReceiver(tokio::sync::mpsc::Receiver<TestMessage>),
     FlumeReceiver(flume::Receiver<TestMessage>),
-    //AsyncCrossbeamReceiver(async_channel::Receiver<TestMessage>),
+    AsyncCrossbeamReceiver(async_channel::Receiver<TestMessage>),
     FuturesReceiver(futures::channel::mpsc::Receiver<TestMessage>),
+    SmolReceiver(smol::channel::Receiver<TestMessage>),
 }
 
 // handy function to sync send a message
 pub fn send_cmd(sender: &TestMessageSender, cmd: TestMessage) {
     match sender {
-        //TestMessageSender::StdMsgSender(sender) => if sender.send(cmd).is_err() {},
+        // TestMessageSender::StdMsgSender(sender) => if sender.send(cmd).is_err() {},
         TestMessageSender::CrossbeamSender(sender) => if sender.send(cmd).is_err() {},
         TestMessageSender::D3Sender(sender) => if sender.send(cmd).is_err() {},
         _ => panic!("unhandled sync sender"),
@@ -72,10 +71,10 @@ pub async fn send_cmd_async(sender: &TestMessageSender, cmd: TestMessage) {
     match sender {
         TestMessageSender::TokioSender(sender) => if sender.send(cmd).await.is_err() {},
         TestMessageSender::FlumeSender(sender) => if sender.send_async(cmd).await.is_err() {},
-
-        // todo: (futures) This is likely wrong. Need to send cmd via Sender sender and await.
-        TestMessageSender::FuturesSender(_sender) => (), //if sender.send(cmd).await.is_err() {},
-        //TestMessageSender::AsyncCrossbeamSender(sender) => sender.send(cmd).await,
+        // fixme: (futures) This is likely wrong. Need to send cmd via Sender sender and await.
+        TestMessageSender::FuturesSender(_sender) => (), // if sender.send(cmd).await.is_err() {},
+        TestMessageSender::AsyncCrossbeamSender(sender) => sender.send(cmd).await,
+        TestMessageSender::SmolSender(sender) => if sender.send(cmd).await.is_err() {},
         _ => panic!("unhandled async sender"),
     }
 }

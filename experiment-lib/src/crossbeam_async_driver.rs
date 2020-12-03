@@ -1,5 +1,7 @@
 use super::*;
-/// For this flume test we'll use flume channels and tokio runtime, and we create a task per element.
+use futures::executor;
+
+/// For this async_channel test we'll use the futures runtime, and we create a task per element.
 /// So, for a 10 element pipeline with 1000 lanes, there will be 4000 task plus some for the concentrator.
 ///  
 struct Forwarder {
@@ -32,7 +34,7 @@ impl AsyncReceiver<TestMessage> for Forwarder {
 }
 
 pub struct ServerSimulator {
-    runtime: Arc<tokio::runtime::Runtime>,
+    threadpool: Arc<executor::ThreadPool>,
     messages: usize,
     heads: Vec<TestMessageSender>,
     notifier: Option<TestMessageReceiver>,
@@ -42,7 +44,7 @@ pub struct ServerSimulator {
 impl Default for ServerSimulator {
     fn default() -> Self {
         Self {
-            runtime: Arc::new(tokio::runtime::Runtime::new().unwrap()),
+            threadpool: Arc::new(executor::ThreadPool::new().unwrap()),
             messages: 0,
             heads: Vec::default(),
             notifier: None,
@@ -52,52 +54,52 @@ impl Default for ServerSimulator {
 }
 
 impl ExperimentDriver for ServerSimulator {
-    fn name(&self) -> &str { "flume w/ tokio" }
+    fn name(&self) -> &str { "async_channel w/ futures" }
 
     fn setup(&mut self, pipelines: usize, lanes: usize, messages: usize) {
-        let rt = &self.runtime;
+        let rt = &self.threadpool;
         self.messages = messages;
-        let (concentrator_s, concentrator_r) = flume::bounded::<TestMessage>(250);
+        let (concentrator_s, concentrator_r) = async_channel::bounded::<TestMessage>(250);
         let forwarder = Forwarder::new(0);
 
-        let task = rt.spawn(async move {
-            while let Ok(cmd) = concentrator_r.recv_async().await {
+        let _task = rt.spawn_ok(async move {
+            while let Ok(cmd) = concentrator_r.recv().await {
                 forwarder.receive(cmd).await;
             }
         });
-        self.tasks.push(task);
-
         for _ in 1 ..= lanes {
             let mut prev = None;
             for id in 1 ..= pipelines {
-                let (s, r) = flume::bounded::<TestMessage>(250);
+                let (s, r) = async_channel::bounded::<TestMessage>(250);
                 let forwarder = Forwarder::new(id);
-                let task = rt.spawn(async move {
-                    while let Ok(cmd) = r.recv_async().await {
+                let _task = rt.spawn_ok(async move {
+                    while let Ok(cmd) = r.recv().await {
                         forwarder.receive(cmd).await;
+                        while let Ok(cmd) = r.try_recv() {
+                            forwarder.receive(cmd).await;
+                        }
                     }
                 });
-                self.tasks.push(task);
                 // if first, save head, otherwise forward previous to this sender
                 match prev {
-                    Some(sender) => rt.block_on(send_cmd_async(
+                    Some(sender) => executor::block_on(send_cmd_async(
                         &sender,
-                        TestMessage::AddSender(TestMessageSender::FlumeSender(s.clone())),
+                        TestMessage::AddSender(TestMessageSender::AsyncCrossbeamSender(s.clone())),
                     )),
-                    None => self.heads.push(TestMessageSender::FlumeSender(s.clone())),
+                    None => self.heads.push(TestMessageSender::AsyncCrossbeamSender(s.clone())),
                 }
-                prev = Some(TestMessageSender::FlumeSender(s));
+                prev = Some(TestMessageSender::AsyncCrossbeamSender(s));
             }
-            rt.block_on(send_cmd_async(
+            executor::block_on(send_cmd_async(
                 &prev.unwrap(),
-                TestMessage::Notify(TestMessageSender::FlumeSender(concentrator_s.clone()), messages),
+                TestMessage::Notify(TestMessageSender::AsyncCrossbeamSender(concentrator_s.clone()), messages),
             ));
         }
-        let (s, r) = flume::bounded::<TestMessage>(10);
-        let s = TestMessageSender::FlumeSender(s);
-        let concentrator_s = TestMessageSender::FlumeSender(concentrator_s);
-        rt.block_on(send_cmd_async(&concentrator_s, TestMessage::Notify(s, lanes)));
-        self.notifier = Some(TestMessageReceiver::FlumeReceiver(r));
+        let (s, r) = async_channel::bounded::<TestMessage>(10);
+        let s = TestMessageSender::AsyncCrossbeamSender(s);
+        let concentrator_s = TestMessageSender::AsyncCrossbeamSender(concentrator_s);
+        executor::block_on(send_cmd_async(&concentrator_s, TestMessage::Notify(s, lanes)));
+        self.notifier = Some(TestMessageReceiver::AsyncCrossbeamReceiver(r));
     }
 
     fn teardown(&mut self) {
@@ -107,15 +109,14 @@ impl ExperimentDriver for ServerSimulator {
     }
 
     fn run(&mut self) {
-        let rt = &self.runtime;
         for id in 0 .. self.messages {
             for head in &self.heads {
-                rt.block_on(send_cmd_async(head, TestMessage::TestData(id)));
+                executor::block_on(send_cmd_async(head, TestMessage::TestData(id)));
             }
         }
         if let Some(ref mut notifier) = self.notifier {
             match notifier {
-                TestMessageReceiver::FlumeReceiver(ref mut receiver) => if rt.block_on(receiver.recv_async()).is_err() {},
+                TestMessageReceiver::AsyncCrossbeamReceiver(ref mut receiver) => if executor::block_on(receiver.recv()).is_err() {},
                 _ => panic!("unexpected receiver"),
             }
         }

@@ -1,4 +1,4 @@
-# D3 -- An Experiment Comparing Different Async and Sync Channel Executors
+# A Series of Experiments Comparing Different Async and Sync Channel Executors
 
 [![Build Status](https://github.com/BruceBrown/channel-executor-experiment/workflows/Rust/badge.svg)](
 https://github.com/brucebrown/channel-executor-experiment/actions)

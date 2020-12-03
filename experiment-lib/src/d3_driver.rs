@@ -52,11 +52,10 @@ impl ExperimentDriver for ServerSimulator {
             let mut prev = None;
             for id in 1 ..= pipelines {
                 let (_, s) = d3::core::executor::connect_with_capacity(Forwarder::new(id), 250);
-                if prev.is_none() {
-                    self.heads.push(TestMessageSender::D3Sender(s.clone()));
-                } else {
-                    let sender = prev.unwrap();
-                    send_cmd(&sender, TestMessage::AddSender(TestMessageSender::D3Sender(s.clone())));
+                // if first, save head, otherwise forward previous to this sender
+                match prev {
+                    Some(sender) => send_cmd(&sender, TestMessage::AddSender(TestMessageSender::D3Sender(s.clone()))),
+                    None => self.heads.push(TestMessageSender::D3Sender(s.clone())),
                 }
                 prev = Some(TestMessageSender::D3Sender(s));
             }
@@ -85,9 +84,8 @@ impl ExperimentDriver for ServerSimulator {
             }
         }
         if let Some(ref notifier) = self.notifier {
-            match notifier {
-                TestMessageReceiver::D3Receiver(receiver) => if receiver.recv().is_err() {},
-                _ => (),
+            if let TestMessageReceiver::D3Receiver(receiver) = notifier {
+                if receiver.recv().is_err() {}
             }
         }
     }

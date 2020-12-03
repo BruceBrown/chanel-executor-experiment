@@ -12,9 +12,12 @@ mod sync_forwarder;
 pub use sync_forwarder::SyncForwarder;
 
 // pull in all of the experiment drivers
+pub mod async_channel;
+pub mod crossbeam_async_driver;
 pub mod crossbeam_driver;
-pub mod tokio_driver;
-pub mod flume_tokio_driver;
-pub mod flume_async_std_driver;
 pub mod d3_driver;
+pub mod flume_async_std_driver;
+pub mod flume_tokio_driver;
 pub mod futures_driver;
+pub mod smol_driver;
+pub mod tokio_driver;

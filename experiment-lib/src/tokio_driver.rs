@@ -62,13 +62,8 @@ impl ExperimentDriver for ServerSimulator {
         let forwarder = Forwarder::new(0);
 
         let task = rt.spawn(async move {
-            loop {
-                let cmd = concentrator_r.recv().await;
-                if cmd.is_some() {
-                    forwarder.receive(cmd.unwrap()).await;
-                } else {
-                    break;
-                }
+            while let Some(cmd) = concentrator_r.recv().await {
+                forwarder.receive(cmd).await;
             }
         });
         self.tasks.push(task);
@@ -80,26 +75,20 @@ impl ExperimentDriver for ServerSimulator {
                 let (s, mut r) = tokio::sync::mpsc::channel::<TestMessage>(250);
                 let forwarder = Forwarder::new(id);
                 let task = rt.spawn(async move {
-                    loop {
-                        let cmd = r.recv().await;
-                        if cmd.is_some() {
-                            forwarder.receive(cmd.unwrap()).await;
-                        } else {
-                            break;
-                        }
+                    while let Some(cmd) = r.recv().await {
+                        forwarder.receive(cmd).await;
                     }
                 });
                 self.tasks.push(task);
-                if prev.is_none() {
-                    // save the head of each lane
-                    self.heads.push(TestMessageSender::TokioSender(s.clone()));
-                } else {
-                    // otherwise tell the previous to send to this forwarder
-                    let sender = prev.unwrap();
-                    let s = s.clone();
-                    rt.spawn(async move {
-                        send_cmd_async(&sender, TestMessage::AddSender(TestMessageSender::TokioSender(s.clone()))).await;
-                    });
+                // if first, save head, otherwise forward previous to this sender
+                match prev {
+                    Some(sender) => {
+                        let s = s.clone();
+                        rt.spawn(async move {
+                            send_cmd_async(&sender, TestMessage::AddSender(TestMessageSender::TokioSender(s.clone()))).await;
+                        });
+                    },
+                    None => self.heads.push(TestMessageSender::TokioSender(s.clone())),
                 }
                 prev = Some(TestMessageSender::TokioSender(s));
             }
@@ -149,4 +138,3 @@ impl ExperimentDriver for ServerSimulator {
         }
     }
 }
-
