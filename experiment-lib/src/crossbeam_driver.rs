@@ -1,8 +1,8 @@
 use super::*;
 
 /// For crossbeam, we can't create a thread per element, instead we'll create a thread for the
-/// Concentrator and one for each pipeline position in a lane. So, for a 10 element pipeline with
-/// 1000 lanes, there will be 10 pipeline threads, each handling a select of 1000 receivers.
+/// Concentrator and one for each pipeline position in a lane. So, for a 5 element pipeline with
+/// 1000 lanes, there will be 5+1 pipeline threads, each handling a select of 1000 receivers + a concentrator.
 ///  
 struct Forwarder {
     inner_sync: std::sync::Mutex<SyncForwarder>,

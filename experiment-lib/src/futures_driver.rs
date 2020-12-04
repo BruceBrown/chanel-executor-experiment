@@ -3,7 +3,7 @@ use futures::channel::mpsc;
 use futures::executor::ThreadPool;
 
 /// For this futures test we'll use futures channels and futures runtime, and we create a task per element.
-/// So, for a 10 element pipeline with 1000 lanes, there will be 4000 task plus some for the concentrator.
+/// So, for a 5 element pipeline with 1000 lanes, there will be 5000 task plus some for the concentrator.
 ///
 /// Unfortunately, this isn't working. See "fixme: (futures)" for details. Bascially, we need a way to
 /// await on a Sender's send, and a wait to await on a Receiver's recv. Perhaps we need to use Sink and

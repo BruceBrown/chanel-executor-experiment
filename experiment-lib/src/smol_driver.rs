@@ -1,8 +1,9 @@
 use super::*;
 
 /// For this smol test we'll use the smol runtime, and we create a task per element.
-/// So, for a 10 element pipeline with 1000 lanes, there will be 4000 task plus some for the concentrator.
-///  
+/// So, for a 5 element pipeline with 1000 lanes, there will be 5000 task plus some for the concentrator.
+///
+/// There may be an issue with the way I setup the multi-threaded executor.
 struct Forwarder {
     inner_async: smol::lock::Mutex<AsyncForwarder>,
 }

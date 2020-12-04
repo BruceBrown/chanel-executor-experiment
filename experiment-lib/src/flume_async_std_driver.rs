@@ -1,6 +1,6 @@
 use super::*;
 /// For this flume test we'll use flume channels and async_std runtime, and we create a task per element.
-/// So, for a 10 element pipeline with 1000 lanes, there will be 4000 task plus some for the concentrator.
+/// So, for a 5 element pipeline with 1000 lanes, there will be 5000 task plus some for the concentrator.
 ///  
 struct Forwarder {
     inner_async: async_std::sync::Mutex<AsyncForwarder>,

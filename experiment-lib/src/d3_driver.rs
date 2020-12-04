@@ -1,8 +1,8 @@
 use super::*;
 use d3::core::machine_impl::Machine;
 
-/// For d3, we create a task per element. So, for a 10 element pipeline with
-/// 1000 lanes, there will be 4000 task plus some for the concentrator. D3
+/// For d3, we create a task per element. So, for a 5 element pipeline with
+/// 1000 lanes, there will be 5000 task plus some for the concentrator. D3
 /// expects a Machine<T> implementation and calls into it when messages are
 /// received. It hides all of the async, so that it appears to be sync.
 pub struct Forwarder {
