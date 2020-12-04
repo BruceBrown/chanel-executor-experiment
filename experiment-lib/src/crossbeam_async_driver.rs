@@ -2,7 +2,7 @@ use super::*;
 use futures::executor;
 
 /// For this async_channel test we'll use the futures runtime, and we create a task per element.
-/// So, for a 10 element pipeline with 1000 lanes, there will be 4000 task plus some for the concentrator.
+/// So, for a 5 element pipeline with 1000 lanes, there will be 5000 task plus some for the concentrator.
 ///  
 struct Forwarder {
     inner_async: tokio::sync::Mutex<AsyncForwarder>,
