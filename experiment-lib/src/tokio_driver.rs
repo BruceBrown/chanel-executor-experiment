@@ -1,42 +1,38 @@
 use super::*;
-/// For tokio, we create a task per element. So, for a 5 element pipeline with
-/// 1000 lanes, there will be 5000 task plus some for the concentrator.
-///  
-struct Forwarder {
-    inner_async: tokio::sync::Mutex<AsyncForwarder>,
-}
+use tokio::sync::mpsc::{channel, unbounded_channel};
 
-impl Forwarder {
-    pub fn new(id: usize) -> Self {
-        Self {
-            inner_async: tokio::sync::Mutex::new(AsyncForwarder::new(id)),
-        }
-    }
-}
-
-#[async_trait]
-impl AsyncReceiver<TestMessage> for Forwarder {
-    async fn receive(&self, cmd: TestMessage) {
-        let mut mutable = self.inner_async.lock().await;
-        match mutable.handle_config(cmd) {
-            Ok(_) => (),
-            Err(msg) => match mutable.validate_sequence(msg) {
-                Ok(msg) => {
-                    mutable.handle_action(msg).await;
-                    mutable.handle_notification().await;
-                },
-                Err(msg) => panic!("sequence error fwd {}, msg {:#?}", mutable.id(), msg),
-            },
-        }
-    }
-}
-
+/// The ServerSimulator simulate an asynchronous server in which there are multiple stages processing
+/// data and parallel processing occurring. To give this concreteness, consider that you want to simulate
+/// audio processing, where you have 4000 connections and there are 5 descrete processing elements between
+/// receiving audio in and sending audio out. The simulator would reprsent that at a pipeline of 5, and
+/// 4000 lanes. It would then driver some number of packets through that configuration, representing
+/// audio data to be processed.
+///
+/// The simulator uses tokio for channels and tokio for task execution.
 pub struct ServerSimulator {
     runtime: Arc<tokio::runtime::Runtime>,
     messages: usize,
-    heads: Vec<TestMessageSender>,
-    notifier: Option<TestMessageReceiver>,
-    tasks: Vec<tokio::task::JoinHandle<()>>,
+    lanes: Vec<ChannelSender>,
+    notifier: Option<ChannelReceiver>,
+    verbosity: Verbosity,
+}
+
+impl ServerSimulator {
+    fn create_channel(config: ExperimentConfig) -> (ChannelSender, ChannelReceiver) {
+        if config.capacity == 0 {
+            let (s, r) = unbounded_channel::<FwdMessage>();
+            (
+                ChannelSender::TokioUnboundedSender(s),
+                ChannelReceiver::TokioUnboundedReceiver(Arc::new(tokio::sync::Mutex::new(r))),
+            )
+        } else {
+            let (s, r) = channel::<FwdMessage>(config.capacity);
+            (
+                ChannelSender::TokioSender(s),
+                ChannelReceiver::TokioReceiver(Arc::new(tokio::sync::Mutex::new(r))),
+            )
+        }
+    }
 }
 
 impl Default for ServerSimulator {
@@ -44,97 +40,94 @@ impl Default for ServerSimulator {
         Self {
             runtime: Arc::new(tokio::runtime::Runtime::new().unwrap()),
             messages: 0,
-            heads: Vec::default(),
+            lanes: Vec::default(),
             notifier: None,
-            tasks: Vec::default(),
+            verbosity: Verbosity::default(),
         }
     }
 }
 
+impl Drop for ServerSimulator {
+    fn drop(&mut self) { self.teardown(); }
+}
+
 impl ExperimentDriver for ServerSimulator {
-    fn name(&self) -> &str { "tokio" }
+    fn name(&self) -> &'static str { "tokio" }
 
-    fn setup(&mut self, pipelines: usize, lanes: usize, messages: usize) {
-        let rt = &self.runtime;
-        self.messages = messages;
-        // create the concentrator and get its recevier running in a thread
-        let (concentrator_s, mut concentrator_r) = tokio::sync::mpsc::channel::<TestMessage>(250);
-        let forwarder = Forwarder::new(0);
+    fn setup(&mut self, config: ExperimentConfig) {
+        self.messages = config.messages;
+        self.verbosity = config.verbosity;
+        let mut senders = Vec::new();
 
-        let task = rt.spawn(async move {
-            while let Some(cmd) = concentrator_r.recv().await {
-                forwarder.receive(cmd).await;
+        let (concentrator_sender, receiver) = Self::create_channel(config);
+        // build the concentrator
+        Builder::new().verbosity(config.verbosity).schedule_tokio(receiver, &self.runtime);
+
+        for lane in 1 ..= config.lanes {
+            for pipeline in 1 ..= config.pipelines {
+                let (sender, receiver) = Self::create_channel(config);
+                // build the forwarder
+                Builder::new()
+                    .pipeline(pipeline)
+                    .lane(lane)
+                    .verbosity(config.verbosity)
+                    .schedule_tokio(receiver, &self.runtime);
+                senders.push(sender);
             }
-        });
-        self.tasks.push(task);
-        // create all of the forwarders for all of the lanes
-        for _ in 1 ..= lanes {
-            let mut prev = None;
-            for id in 1 ..= pipelines {
-                // create the forwarder's sender and receiver
-                let (s, mut r) = tokio::sync::mpsc::channel::<TestMessage>(250);
-                let forwarder = Forwarder::new(id);
-                let task = rt.spawn(async move {
-                    while let Some(cmd) = r.recv().await {
-                        forwarder.receive(cmd).await;
-                    }
-                });
-                self.tasks.push(task);
-                // if first, save head, otherwise forward previous to this sender
-                match prev {
-                    Some(sender) => {
-                        let s = s.clone();
-                        rt.spawn(async move {
-                            send_cmd_async(&sender, TestMessage::AddSender(TestMessageSender::TokioSender(s.clone()))).await;
-                        });
-                    },
-                    None => self.heads.push(TestMessageSender::TokioSender(s.clone())),
-                }
-                prev = Some(TestMessageSender::TokioSender(s));
+            // configure the forwarders
+            senders.push(concentrator_sender.clone());
+            for _ in (2 ..= config.pipelines).rev() {
+                let sender = senders.pop().unwrap();
+                let last_sender = senders.last().unwrap().clone();
+                let future = async move {
+                    last_sender.send_async(FwdMessage::AddSender(sender)).await.ok();
+                };
+                let _task = self.runtime.spawn(future);
             }
-            // tell the last to notify the concentrator when it receives all of the messages
-            let concentrator_s = TestMessageSender::TokioSender(concentrator_s.clone());
-            let sender = prev.unwrap();
-            rt.spawn(async move {
-                send_cmd_async(&sender, TestMessage::Notify(concentrator_s, messages)).await;
-            });
         }
-        // finally, create a notifier, setup the concentrator to notify it and save it
-        let (s, r) = tokio::sync::mpsc::channel::<TestMessage>(10);
-        let s = TestMessageSender::TokioSender(s);
-        let concentrator_s = TestMessageSender::TokioSender(concentrator_s);
-        rt.spawn(async move {
-            send_cmd_async(&concentrator_s, TestMessage::Notify(s, lanes)).await;
+        // senders are now just the head sender of each lane, save it
+        self.lanes = senders;
+        // configure the concentrator
+        let (notifier_sender, notifier_receiver) = Self::create_channel(config);
+        let _task = self.runtime.spawn(async move {
+            concentrator_sender
+                .send_async(FwdMessage::Notify(notifier_sender, config.lanes * config.messages))
+                .await
+                .ok()
         });
-        self.notifier = Some(TestMessageReceiver::TokioReceiver(r));
+        self.notifier = Some(notifier_receiver);
     }
 
     fn teardown(&mut self) {
-        self.heads.clear();
+        if self.verbosity != Verbosity::None {
+            println!("starting teardown for {}", self.name());
+        }
         self.notifier = None;
-        self.tasks.clear();
+        self.lanes.clear();
+        let name = self.name();
+        if self.verbosity != Verbosity::None {
+            println!("all tasks completed, {} shutdown complete", name);
+        }
     }
 
-    fn run(&mut self) {
-        let rt = &self.runtime;
-        let heads = self.heads.clone();
+    fn run(&self) {
         let messages = self.messages;
-        rt.spawn(async move {
-            // send a message into each lane, repeat until we've sent all of the messages
-            for id in 0 .. messages {
-                for head in &heads {
-                    send_cmd_async(head, TestMessage::TestData(id)).await;
+        // parallelize driving the lanes
+        for sender in &self.lanes {
+            let sender = sender.clone();
+            let future = async move {
+                for msg_id in 0 .. messages {
+                    sender.send_async(FwdMessage::TestData(msg_id)).await.unwrap();
                 }
-            }
-        });
-        // wait for the concentrator to send the notification message
-        if let Some(ref mut notifier) = self.notifier {
-            match notifier {
-                TestMessageReceiver::TokioReceiver(ref mut receiver) => {
-                    rt.block_on(receiver.recv());
-                },
-                _ => panic!("unexpected receiver"),
-            }
+            };
+            let _task = self.runtime.spawn(future);
+        }
+        // wait for the notifier to get a count
+        if let Some(ref notifier) = self.notifier {
+            let notifier = notifier.clone();
+            let notifier = async move { notifier.recv_async().await };
+            let task = self.runtime.spawn(notifier);
+            let _result = self.runtime.block_on(async { task.await });
         }
     }
 }

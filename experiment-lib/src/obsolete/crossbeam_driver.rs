@@ -42,10 +42,10 @@ pub struct ServerSimulator {
 impl ExperimentDriver for ServerSimulator {
     fn name(&self) -> &str { "crossbeam" }
 
-    fn setup(&mut self, pipelines: usize, lanes: usize, messages: usize) {
-        self.messages = messages;
+    fn setup(&mut self, config: ExperimentConfig) {
+        self.messages = config.messages;
         // create the concentrator and get its recevier running in a thread
-        let (concentrator_s, concentrator_r) = crossbeam::channel::bounded::<TestMessage>(250);
+        let (concentrator_s, concentrator_r) = crossbeam::channel::bounded::<TestMessage>(config.capacity);
         let forwarder = Forwarder::new(0);
 
         let handle = std::thread::spawn(move || {
@@ -58,15 +58,15 @@ impl ExperimentDriver for ServerSimulator {
         // create a vector of a vector of receivers, essentially [pipelines][lanes]
         let mut recvs: Vec<Vec<crossbeam::channel::Receiver<TestMessage>>> = Vec::new();
         let mut forwarders: Vec<Vec<Forwarder>> = Vec::new();
-        for _ in 1 ..= pipelines {
+        for _ in 1 ..= config.pipelines {
             recvs.push(Vec::new());
             forwarders.push(Vec::new());
         }
-        for _ in 1 ..= lanes {
+        for _ in 1 ..= config.lanes {
             let mut prev = None;
-            for id in 0 .. pipelines {
+            for id in 0 .. config.pipelines {
                 // create the forwarder's sender and receiver
-                let (s, r) = crossbeam::channel::bounded::<TestMessage>(250);
+                let (s, r) = crossbeam::channel::bounded::<TestMessage>(config.capacity);
                 recvs[id].push(r);
                 let forwarder = Forwarder::new(id + 1);
                 forwarders[id].push(forwarder);
@@ -80,10 +80,10 @@ impl ExperimentDriver for ServerSimulator {
             // tell the last to notify the concentrator when it receives all of the messages
             let concentrator_s = TestMessageSender::CrossbeamSender(concentrator_s.clone());
             let sender = prev.unwrap();
-            send_cmd(&sender, TestMessage::Notify(concentrator_s, messages));
+            send_cmd(&sender, TestMessage::Notify(concentrator_s, config.messages));
         }
         // launch a thread for each pipeline
-        for _ in 0 .. pipelines {
+        for _ in 0 .. config.pipelines {
             let recv = recvs.remove(0);
             let forwarder = forwarders.remove(0);
             let handle = std::thread::spawn(move || {
@@ -109,7 +109,7 @@ impl ExperimentDriver for ServerSimulator {
         let (s, r) = crossbeam::channel::bounded::<TestMessage>(10);
         let s = TestMessageSender::CrossbeamSender(s);
         let concentrator_s = TestMessageSender::CrossbeamSender(concentrator_s);
-        send_cmd(&concentrator_s, TestMessage::Notify(s, lanes));
+        send_cmd(&concentrator_s, TestMessage::Notify(s, config.lanes));
         self.notifier = Some(TestMessageReceiver::CrossbeamReceiver(r));
     }
 
