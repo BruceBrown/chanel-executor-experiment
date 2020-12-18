@@ -40,11 +40,11 @@ pin-utils = "0.1.0"
 
 [patch.crates-io]
 # Add patches here
-async-task = {version="4.0.3", path = "/Users/bruce/Projects/rust/async-task"}
-async-channel = {version="1.5.1", path = "/Users/bruce/Projects/rust/async-channel"}
-concurrent-queue = {version="1.2.2", path = "/Users/bruce/Projects/rust/concurrent-queue"}
-async-executor = {version="1.4.0", path = "/Users/bruce/Projects/rust/async-executor"}
-futures-lite = {version="1.11.2", path = "/Users/bruce/Projects/rust/futures-lite"}
+#async-task = {version="4.0.3", path = "/Users/bruce/Projects/rust/async-task"}
+#async-channel = {version="1.5.1", path = "/Users/bruce/Projects/rust/async-channel"}
+#concurrent-queue = {version="1.2.2", path = "/Users/bruce/Projects/rust/concurrent-queue"}
+#async-executor = {version="1.4.0", path = "/Users/bruce/Projects/rust/async-executor"}
+#futures-lite = {version="1.11.2", path = "/Users/bruce/Projects/rust/futures-lite"}
 
 [profile.release]
 opt-level = 3
