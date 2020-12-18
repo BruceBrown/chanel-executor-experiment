@@ -22,10 +22,7 @@ fn drivers() -> Vec<(usize, Box<dyn ExperimentDriver>)> {
             5000,
             Box::new(forwarder_driver::ServerSimulator::default()) as Box<dyn ExperimentDriver>,
         ),
-        (
-            5000,
-            Box::new(smol_driver::ServerSimulator::default()) as Box<dyn ExperimentDriver>,
-        ),
+        (5000, Box::new(smol_driver::ServerSimulator::default()) as Box<dyn ExperimentDriver>),
         (
             5000,
             Box::new(tokio_driver::ServerSimulator::default()) as Box<dyn ExperimentDriver>,
