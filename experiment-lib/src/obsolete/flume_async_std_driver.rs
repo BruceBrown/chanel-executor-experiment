@@ -42,9 +42,9 @@ pub struct ServerSimulator {
 impl ExperimentDriver for ServerSimulator {
     fn name(&self) -> &str { "flume w/ async-std" }
 
-    fn setup(&mut self, pipelines: usize, lanes: usize, messages: usize) {
-        self.messages = messages;
-        let (concentrator_s, concentrator_r) = flume::bounded::<TestMessage>(250);
+    fn setup(&mut self, config: ExperimentConfig) {
+        self.messages = config.messages;
+        let (concentrator_s, concentrator_r) = flume::bounded::<TestMessage>(config.capacity);
         let forwarder = Forwarder::new(0);
 
         let task = async_std::task::spawn(async move {
@@ -54,10 +54,10 @@ impl ExperimentDriver for ServerSimulator {
         });
         self.tasks.push(task);
 
-        for _ in 1 ..= lanes {
+        for _ in 1 ..= config.lanes {
             let mut prev = None;
-            for id in 1 ..= pipelines {
-                let (s, r) = flume::bounded::<TestMessage>(250);
+            for id in 1 ..= config.pipelines {
+                let (s, r) = flume::bounded::<TestMessage>(config.capacity);
                 let forwarder = Forwarder::new(id);
                 let task = async_std::task::spawn(async move {
                     while let Ok(cmd) = r.recv_async().await {
@@ -77,13 +77,13 @@ impl ExperimentDriver for ServerSimulator {
             }
             async_std::task::block_on(send_cmd_async(
                 &prev.unwrap(),
-                TestMessage::Notify(TestMessageSender::FlumeSender(concentrator_s.clone()), messages),
+                TestMessage::Notify(TestMessageSender::FlumeSender(concentrator_s.clone()), config.messages),
             ));
         }
         let (s, r) = flume::bounded::<TestMessage>(10);
         let s = TestMessageSender::FlumeSender(s);
         let concentrator_s = TestMessageSender::FlumeSender(concentrator_s);
-        async_std::task::block_on(send_cmd_async(&concentrator_s, TestMessage::Notify(s, lanes)));
+        async_std::task::block_on(send_cmd_async(&concentrator_s, TestMessage::Notify(s, config.lanes)));
         self.notifier = Some(TestMessageReceiver::FlumeReceiver(r));
     }
 

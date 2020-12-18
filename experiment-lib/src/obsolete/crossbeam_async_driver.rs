@@ -56,10 +56,10 @@ impl Default for ServerSimulator {
 impl ExperimentDriver for ServerSimulator {
     fn name(&self) -> &str { "async_channel w/ futures" }
 
-    fn setup(&mut self, pipelines: usize, lanes: usize, messages: usize) {
+    fn setup(&mut self, config: ExperimentConfig) {
         let rt = &self.threadpool;
-        self.messages = messages;
-        let (concentrator_s, concentrator_r) = async_channel::bounded::<TestMessage>(250);
+        self.messages = config.messages;
+        let (concentrator_s, concentrator_r) = async_channel::bounded::<TestMessage>(config.capacity);
         let forwarder = Forwarder::new(0);
 
         let _task = rt.spawn_ok(async move {
@@ -67,10 +67,10 @@ impl ExperimentDriver for ServerSimulator {
                 forwarder.receive(cmd).await;
             }
         });
-        for _ in 1 ..= lanes {
+        for _ in 1 ..= config.lanes {
             let mut prev = None;
-            for id in 1 ..= pipelines {
-                let (s, r) = async_channel::bounded::<TestMessage>(250);
+            for id in 1 ..= config.pipelines {
+                let (s, r) = async_channel::bounded::<TestMessage>(config.capacity);
                 let forwarder = Forwarder::new(id);
                 let _task = rt.spawn_ok(async move {
                     while let Ok(cmd) = r.recv().await {
@@ -92,13 +92,13 @@ impl ExperimentDriver for ServerSimulator {
             }
             executor::block_on(send_cmd_async(
                 &prev.unwrap(),
-                TestMessage::Notify(TestMessageSender::AsyncCrossbeamSender(concentrator_s.clone()), messages),
+                TestMessage::Notify(TestMessageSender::AsyncCrossbeamSender(concentrator_s.clone()), config.messages),
             ));
         }
         let (s, r) = async_channel::bounded::<TestMessage>(10);
         let s = TestMessageSender::AsyncCrossbeamSender(s);
         let concentrator_s = TestMessageSender::AsyncCrossbeamSender(concentrator_s);
-        executor::block_on(send_cmd_async(&concentrator_s, TestMessage::Notify(s, lanes)));
+        executor::block_on(send_cmd_async(&concentrator_s, TestMessage::Notify(s, config.lanes)));
         self.notifier = Some(TestMessageReceiver::AsyncCrossbeamReceiver(r));
     }
 

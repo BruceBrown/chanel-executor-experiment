@@ -60,9 +60,9 @@ impl Default for ServerSimulator {
 impl ExperimentDriver for ServerSimulator {
     fn name(&self) -> &str { "futures" }
 
-    fn setup(&mut self, pipelines: usize, lanes: usize, messages: usize) {
-        self.messages = messages;
-        let (concentrator_s, mut concentrator_r) = mpsc::channel::<TestMessage>(250);
+    fn setup(&mut self, config: ExperimentConfig) {
+        self.messages = config.messages;
+        let (concentrator_s, mut concentrator_r) = mpsc::channel::<TestMessage>(config.capacity);
         let forwarder = Forwarder::new(0);
 
         self.executor.spawn_ok(async move {
@@ -76,10 +76,10 @@ impl ExperimentDriver for ServerSimulator {
             }
         });
 
-        for _ in 1 ..= lanes {
+        for _ in 1 ..= config.lanes {
             let mut prev = None;
-            for id in 1 ..= pipelines {
-                let (s, mut r) = mpsc::channel::<TestMessage>(250);
+            for id in 1 ..= config.pipelines {
+                let (s, mut r) = mpsc::channel::<TestMessage>(config.capacity);
                 let forwarder = Forwarder::new(id);
                 self.executor.spawn_ok(async move {
                     loop {
@@ -107,7 +107,7 @@ impl ExperimentDriver for ServerSimulator {
             self.executor.spawn_ok(async move {
                 send_cmd_async(
                     &prev.unwrap(),
-                    TestMessage::Notify(TestMessageSender::FuturesSender(concentrator_s), messages),
+                    TestMessage::Notify(TestMessageSender::FuturesSender(concentrator_s), config.messages),
                 )
                 .await;
             });
@@ -116,7 +116,7 @@ impl ExperimentDriver for ServerSimulator {
         let s = TestMessageSender::FuturesSender(s);
         let concentrator_s = TestMessageSender::FuturesSender(concentrator_s);
         futures::executor::block_on(async move {
-            send_cmd_async(&concentrator_s, TestMessage::Notify(s, lanes)).await;
+            send_cmd_async(&concentrator_s, TestMessage::Notify(s, config.lanes)).await;
         });
 
         self.notifier = Some(TestMessageReceiver::FuturesReceiver(r));

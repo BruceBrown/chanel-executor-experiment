@@ -13,6 +13,40 @@ https://docs.rs/channel-executor-experiment)
 [![Rust 1.47+](https://img.shields.io/badge/rust-1.47+-color.svg)](
 https://www.rust-lang.org)
 
+## Goals
+
+The primary goal is to provide a performance comparison between various as async channel implementations alongside
+various async executors.
+
+## The Experiment
+A server simulation will be used for bench marks. I consists of a pipeline of channels,
+where the first forwards to the second and in turn it forwards to the third, etc. A number of pipelines are created,
+forming lanes and are driven in parallel. Each tail end of the pipeline sends to a concentrator, which sends to
+a notifier channel when all lanes have completed running. The elapsed time from when the lanes sere sent to until
+the notification is received is measured to get a relative performance indication.
+
+Experiments will be run that varry the message queue length and number of lanes. A baseline experiment will establish the performance
+of a minimal experiment. Then all other experiments will be compared in order to draw some conclusions.
+
+## The Forwarder
+A Forwarder struct will be used for simulating pipeline steps. It receives a variant and interprets it as either configuration or data.
+The configuation messages provides a means of injecting a forwarding sender or a counted notifier. Whereas the data messages provide a
+sequenced stream of messages.
+
+## Fairness
+Other than the baseline implementation, which is a bare-bones receive and forward, all implementations will use the same template
+for setting up the pipeline, lanes, and notification. Allowances will be made for awaiting on channel send and receive as well as for
+creating and scheduling tasks.
+
+## Drivers
+Each experiment implements a driver, responsible to setup, teardown and running an iteration of the experiment. The following drivers
+are available for testing:
+* smol, a driver using smol::channel and smol::executor.
+* async_channel, based upon smol, this uses the latest version of the async_channel, async_executor, etc.
+* flume_async, using a flume channel and async_executor.
+* flume_tokio, using a flume channel and tokio executor.
+* forwarder, using smol channel and smol executor, this provides a relative comparison of the overhead incurred by the common Forwarder implementation.
+* tokio, using tokio channel and tokio executor.
 
 ## Compatibility
 
